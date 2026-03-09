@@ -1,33 +1,62 @@
 # AES67 Sender
-Make a soundcard input available in an AES67 network. Works under Windows (DirectSound, ASIO and WASAPI), Linux (ALSA, JACK, PulseAudio and OSS) and MacOS (CoreAudio and JACK). Tested under Ubuntu (18.04 and 20.04), Raspbian and Windows 10. Not yet tested under MacOS.
+Fork of [philhartung/aes67-sender](https://github.com/philhartung/aes67-sender) with added support for PTP domains (0-127), configurable multicast TTL, and virtual audio device usage.
+
+Make a soundcard input available in an AES67 network. Works under Windows (DirectSound, ASIO and WASAPI), Linux (ALSA, JACK, PulseAudio and OSS) and MacOS (CoreAudio and JACK).
+
 ## Installation
 To install aes67-sender, clone the repository and install the dependencies.
 ```
-git clone https://github.com/philhartung/aes67-sender.git
+git clone https://github.com/evenover/aes67-sender.git
 cd aes67-sender
 npm install
 ```
+The `postinstall` script automatically patches the `ptpv2` module to support all PTP domains (0-127).
+
 Audify (audio backend used) prebuilds are available for most major platforms and Node versions. If you need to build Audify from source, see https://github.com/almogh52/audify#requirements-for-source-build.
+
 ## Usage
 To display the help, execute `node aes67 --help`:
 ```
 Usage: aes67 [options]
 
 Options:
-  -V, --version            output the version number
-  -v, --verbose            enable verbosity
-  --devices                list audio devices
-  -d, --device <index>     set audio device
-  -m, --mcast <address>    multicast address of AES67 stream
-  -n, --streamname <name>  name of AES67 stream
-  -c, --channels <number>  number of channels
-  -a, --api <api>          audio api (ALSA, OSS, PULSE, JACK, MACOS, ASIO, DS, WASAPI)
-  --address <address>      IPv4 address of network interface
-  -h, --help               display help for command
+  -V, --version              output the version number
+  -v, --verbose              enable verbosity
+  --devices                  list audio devices
+  -d, --device <index>       set audio device
+  -m, --mcast <address>      multicast address of AES67 stream
+  -n, --streamname <name>    name of AES67 stream
+  -c, --channels <number>    number of channels
+  -a, --api <api>            audio api (ALSA, OSS, PULSE, JACK, MACOS, ASIO, DS, WASAPI)
+  --address <address>        IPv4 address of network interface
+  --ttl <number>             multicast TTL (default: 1)
+  --ptp-domain <number>      PTP domain number (default: 0)
+  -h, --help                 display help for command
 ```
 
-The software has to be executed with priviliges, because the PTP client binds to ports below 1024.
+The software has to be executed with privileges, because the PTP client binds to ports below 1024.
+
+## Changes from upstream
+- **PTP domain support**: Use `--ptp-domain <number>` to join any PTP domain (0-127). The upstream version only supports domains 0-3.
+- **Multicast TTL**: Use `--ttl <number>` to set the multicast TTL. Default is 1 (same subnet). Use higher values (e.g. 8) to allow packets to cross router hops.
+- **Buffer size validation**: Incorrectly sized audio buffers from the audio backend are discarded to prevent the receiver from seeing inconsistent channel counts.
+
 ## Use cases
+
+### Streaming desktop audio with VB-Audio Virtual Cable (Windows)
+You can use [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) to capture audio from applications like Spotify, a browser, or any other audio source and stream it over AES67.
+
+1. Install [VB-Audio Virtual Cable](https://vb-audio.com/Cable/)
+2. In Windows Sound Settings, set the output device of your application (e.g. Spotify) to **CABLE Input (VB-Audio Virtual Cable)**
+3. List audio devices to find the virtual cable input:
+   ```
+   node aes67 -a wasapi --devices
+   ```
+4. Start the stream using the virtual cable's device index:
+   ```
+   node aes67 -a wasapi -d <index> -n "My Stream" -c 2 --ptp-domain 84 --ttl 8
+   ```
+
 ### Raspberry Pi 4 with Focusrite Scarlett 2i2
 The setup is a Rasperry Pi 4 (running Ubuntu 20.04) running *aes67-sender* with a Focusrite Scarlett 2i2 USB audio interface. First list the audio devices:
 ```

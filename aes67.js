@@ -21,6 +21,8 @@ program.option('-n, --streamname <name>', 'name of AES67 stream');
 program.option('-c, --channels <number>', 'number of channels');
 program.option('-a, --api <api>', 'audio api (ALSA, OSS, PULSE, JACK, MACOS, ASIO, DS, WASAPI)');
 program.option('--address <address>', 'IPv4 address of network interface');
+program.option('--ttl <number>', 'multicast TTL (default: 1)');
+program.option('--ptp-domain <number>', 'PTP domain number (default: 0)');
 
 program.parse(process.argv);
 
@@ -148,6 +150,11 @@ logger('Selected '+aes67Multicast+' as RTP multicast address.');
 // Add interface to multicast membership (otherwise the OS randomly selects an interface for the multicast traffic)
 client.addMembership(aes67Multicast, addr);
 
+if(program.ttl){
+	client.setMulticastTTL(parseInt(program.ttl));
+	logger('Set multicast TTL to', program.ttl);
+}
+
 //AES67 params (hardcoded)
 const samplerate = 48000;
 const ptime = 1;
@@ -180,19 +187,30 @@ setTimeout(function(){
 	}
 }, 10000);
 
+let domainNumber = 0;
+if(program.ptpDomain){
+	domainNumber = parseInt(program.ptpDomain);
+}
 //init PTP client
-ptpv2.init(addr, 0, function(){
+ptpv2.init(addr, domainNumber, function(){
 	ptpMaster = ptpv2.ptp_master();
 	logger('Synced to', ptpMaster, 'successfully');
 
 	//start audio and sdp
 	logger('Starting SAP annoucements and audio stream.');
 	rtAudio.start();
-	sdp.start(addr, aes67Multicast, samplerate, audioChannels, encoding, streamName, sessID, sessVersion, ptpMaster);
+	sdp.start(addr, aes67Multicast, samplerate, audioChannels, encoding, streamName, sessID, sessVersion, ptpMaster, domainNumber);
 });
 
 //RTP implementation
+const expectedPcmBytes = fpp * audioChannels * 2; // expected L16 buffer size per callback
 let rtpSend = function(pcm){
+	//discard incorrectly sized buffers
+	if(pcm.length !== expectedPcmBytes){
+		logger('Unexpected PCM buffer size:', pcm.length, 'expected:', expectedPcmBytes);
+		return;
+	}
+
 	//convert L16 to L24
 	let samples = pcm.length / 2;
 	let l24 = Buffer.alloc(samples * 3);
