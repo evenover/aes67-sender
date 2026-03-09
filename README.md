@@ -32,7 +32,7 @@ Options:
   --ttl <number>             multicast TTL (default: 1)
   --ptp-domain <number>      PTP domain number (default: 0)
   --nmos                     enable NMOS IS-04/IS-05 (peer-to-peer mDNS)
-  --nmos-port <number>       NMOS HTTP port (default: 3000)
+  --nmos-port <number>       NMOS HTTP port (default: 8090)
   -h, --help                 display help for command
 ```
 
