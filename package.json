@@ -23,8 +23,11 @@
   "homepage": "https://github.com/philhartung/aes67-sender#readme",
   "dependencies": {
     "audify": "^1.5.2",
+    "bonjour-service": "^1.3.0",
     "commander": "^6.1.0",
-    "ptpv2": "^1.0.6"
+    "express": "^5.2.1",
+    "ptpv2": "^1.0.6",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "patch-package": "^8.0.1"

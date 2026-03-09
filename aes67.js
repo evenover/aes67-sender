@@ -4,6 +4,7 @@ const os = require('os');
 const ptpv2 = require('ptpv2');
 const dgram = require('dgram');
 const sdp = require('./lib/sdp');
+const nmos = require('./lib/nmos');
 const { Command } = require('commander');
 const { RtAudio, RtAudioFormat, RtAudioApi } = require('audify');
 
@@ -23,6 +24,8 @@ program.option('-a, --api <api>', 'audio api (ALSA, OSS, PULSE, JACK, MACOS, ASI
 program.option('--address <address>', 'IPv4 address of network interface');
 program.option('--ttl <number>', 'multicast TTL (default: 1)');
 program.option('--ptp-domain <number>', 'PTP domain number (default: 0)');
+program.option('--nmos', 'enable NMOS IS-04/IS-05 (peer-to-peer mDNS)');
+program.option('--nmos-port <number>', 'NMOS HTTP port (default: 3000)');
 
 program.parse(process.argv);
 
@@ -149,6 +152,7 @@ logger('Selected '+aes67Multicast+' as RTP multicast address.');
 
 // Add interface to multicast membership (otherwise the OS randomly selects an interface for the multicast traffic)
 client.addMembership(aes67Multicast, addr);
+client.setMulticastInterface(addr);
 
 if(program.ttl){
 	client.setMulticastTTL(parseInt(program.ttl));
@@ -200,6 +204,22 @@ ptpv2.init(addr, domainNumber, function(){
 	logger('Starting SAP annoucements and audio stream.');
 	rtAudio.start();
 	sdp.start(addr, aes67Multicast, samplerate, audioChannels, encoding, streamName, sessID, sessVersion, ptpMaster, domainNumber);
+
+	if(program.nmos){
+		nmos.start({
+			addr: addr,
+			httpPort: program.nmosPort ? parseInt(program.nmosPort) : 8090,
+			streamName: streamName,
+			multicastAddr: aes67Multicast,
+			samplerate: samplerate,
+			channels: audioChannels,
+			encoding: encoding,
+			sessID: sessID,
+			sessVersion: sessVersion,
+			ptpMaster: ptpMaster,
+			ptpDomain: domainNumber
+		});
+	}
 });
 
 //RTP implementation

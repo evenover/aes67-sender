@@ -31,6 +31,8 @@ Options:
   --address <address>        IPv4 address of network interface
   --ttl <number>             multicast TTL (default: 1)
   --ptp-domain <number>      PTP domain number (default: 0)
+  --nmos                     enable NMOS IS-04/IS-05 (peer-to-peer mDNS)
+  --nmos-port <number>       NMOS HTTP port (default: 3000)
   -h, --help                 display help for command
 ```
 
@@ -40,6 +42,7 @@ The software has to be executed with privileges, because the PTP client binds to
 - **PTP domain support**: Use `--ptp-domain <number>` to join any PTP domain (0-127). The upstream version only supports domains 0-3.
 - **Multicast TTL**: Use `--ttl <number>` to set the multicast TTL. Default is 1 (same subnet). Use higher values (e.g. 8) to allow packets to cross router hops.
 - **Buffer size validation**: Incorrectly sized audio buffers from the audio backend are discarded to prevent the receiver from seeing inconsistent channel counts.
+- **NMOS IS-04/IS-05**: Use `--nmos` to enable NMOS discovery (peer-to-peer via mDNS). The sender will advertise itself as an NMOS Node and expose IS-04 Node API and IS-05 Connection API. NMOS controllers can discover the sender and retrieve its SDP/transport parameters. Use `--nmos-port` to change the HTTP port (default: 3000).
 
 ## Use cases
 
