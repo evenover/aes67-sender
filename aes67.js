@@ -1,31 +1,33 @@
-// execute with realtime scheduling
-// sudo chrt -f 99 node aes67 --api ALSA -d 3
+// AES67 sender using GStreamer for audio capture and RTP streaming
+// Node.js handles PTP sync, SDP/SAP announcements, and NMOS
+//
+// Requires: GStreamer installed with wasapi2src, audioconvert, rtpL24pay, udpsink
+// Usage: node aes67 -d <wasapi-device-id> -m 239.254.151.11 --address 10.151.5.227 -c 2 --ptp-domain 84 --nmos --ttl 5 -v
+
 const os = require('os');
+const { spawn, execSync } = require('child_process');
 const ptpv2 = require('ptpv2');
-const dgram = require('dgram');
 const sdp = require('./lib/sdp');
 const nmos = require('./lib/nmos');
 const { Command } = require('commander');
-const { RtAudio, RtAudioFormat, RtAudioApi } = require('audify');
-
-//init udp client
-const client = dgram.createSocket('udp4');
 
 //command line options
 const program = new Command();
-program.version('1.0.0');
+program.version('2.0.0');
 program.option('-v, --verbose', 'enable verbosity');
-program.option('--devices', 'list audio devices');
-program.option('-d, --device <index>', 'set audio device');
+program.option('--devices', 'list GStreamer audio devices');
+program.option('-d, --device <id>', 'WASAPI device ID (from --devices)');
 program.option('-m, --mcast <address>', 'multicast address of AES67 stream');
 program.option('-n, --streamname <name>', 'name of AES67 stream');
-program.option('-c, --channels <number>', 'number of channels');
-program.option('-a, --api <api>', 'audio api (ALSA, OSS, PULSE, JACK, MACOS, ASIO, DS, WASAPI)');
+program.option('-c, --channels <number>', 'number of channels (default: 2)');
 program.option('--address <address>', 'IPv4 address of network interface');
 program.option('--ttl <number>', 'multicast TTL (default: 1)');
 program.option('--ptp-domain <number>', 'PTP domain number (default: 0)');
 program.option('--nmos', 'enable NMOS IS-04/IS-05 (peer-to-peer mDNS)');
-program.option('--nmos-port <number>', 'NMOS HTTP port (default: 3000)');
+program.option('--nmos-port <number>', 'NMOS HTTP port (default: 8090)');
+program.option('-l, --latency <ms>', 'timestamp offset in ms (default: 0)');
+program.option('--loopback', 'use WASAPI loopback capture (record what you hear)');
+program.option('--low-latency', 'enable low-latency WASAPI mode');
 
 program.parse(process.argv);
 
@@ -34,59 +36,53 @@ if(program.verbose){
 	logger = console.log;
 }
 
-//rtAudio api stuff
-let rtAudio;
-if(program.api){
-	switch(program.api.toLowerCase()){
-		case 'alsa':
-			rtAudio = new RtAudio(RtAudioApi.LINUX_ALSA);
-			break;
-		case 'oss':
-			rtAudio = new RtAudio(RtAudioApi.LINUX_OSS);
-			break;
-		case 'pulse':
-			rtAudio = new RtAudio(RtAudioApi.LINUX_PULSE);
-			break;
-		case 'jack':
-			rtAudio = new RtAudio(RtAudioApi.UNIX_JACK);
-			break;
-		case 'macos':
-			rtAudio = new RtAudio(RtAudioApi.MACOSX_CORE);
-			break;
-		case 'asio':
-			rtAudio = new RtAudio(RtAudioApi.WINDOWS_ASIO);
-			break;
-		case 'ds':
-			rtAudio = new RtAudio(RtAudioApi.WINDOWS_DS);
-			break;
-		case 'wasapi':
-			rtAudio = new RtAudio(RtAudioApi.WINDOWS_WASAPI);
-			break;
-		default:
-			rtAudio = new RtAudio();
-	}
-}else{
-	rtAudio = new RtAudio();
-}
-
-logger('Selected',rtAudio.getApi(),'as audio api');
-
-//list audio devices
-let audioDevices = rtAudio.getDevices();
+//list GStreamer audio devices
 if(program.devices){
-	console.log('Index, Name, # of Channels');
-	for(let i = 0; i < audioDevices.length; i++){
-		let device = audioDevices[i];
-		
-		if(device.inputChannels > 0){
-			console.log(i, device.name, device.inputChannels);
-		}
-	}
+	try {
+		const output = execSync('gst-device-monitor-1.0 Audio/Source', {
+			encoding: 'utf8',
+			timeout: 10000
+		});
 
+		//parse device list into a readable format
+		const devices = [];
+		const blocks = output.split('Device found:');
+		for(let i = 1; i < blocks.length; i++){
+			const block = blocks[i];
+			const nameMatch = block.match(/name\s*:\s*(.+)/);
+			const idMatch = block.match(/device\.id\s*=\s*(.+)/);
+			const descMatch = block.match(/wasapi2\.device\.description\s*=\s*(.+)/);
+			const loopbackMatch = block.match(/wasapi2\.device\.loopback\s*=\s*(\w+)/);
+			const actualNameMatch = block.match(/device\.actual-name\s*=\s*(.+)/);
+
+			if(idMatch){
+				devices.push({
+					name: (descMatch ? descMatch[1].trim() : (nameMatch ? nameMatch[1].trim() : 'Unknown')),
+					actualName: actualNameMatch ? actualNameMatch[1].trim() : '',
+					id: idMatch[1].trim(),
+					loopback: loopbackMatch ? loopbackMatch[1].trim() === 'true' : false
+				});
+			}
+		}
+
+		console.log('\nAvailable audio devices:\n');
+		console.log('  #  Type       Device ID                                              Name');
+		console.log('  -  ----       ---------                                              ----');
+		for(let i = 0; i < devices.length; i++){
+			const d = devices[i];
+			const type = d.loopback ? 'loopback' : 'input   ';
+			const name = d.actualName ? d.name + ' (' + d.actualName + ')' : d.name;
+			console.log('  ' + i + '  ' + type + '   ' + d.id.padEnd(55) + name);
+		}
+		console.log('\nUsage: node aes67 -d "<device-id>" ...');
+		console.log('For loopback devices, add --loopback');
+	} catch(e) {
+		console.error('Failed to list devices. Is GStreamer installed?');
+		console.error(e.message);
+	}
 	process.exit();
 }
 
-//options for AES67
 //stream name
 let streamName = os.hostname();
 if(program.streamname){
@@ -97,17 +93,16 @@ if(program.streamname){
 let addr;
 if(program.address){
 	addr = program.address;
-	//check if IPv4????
 }else{
 	let interfaces = os.networkInterfaces();
 	let interfaceNames = Object.keys(interfaces);
 	let addresses = [];
 
 	for(let i = 0; i < interfaceNames.length; i++){
-		let interface = interfaces[interfaceNames[i]];
-		for(let j = 0; j < interface.length; j++){
-			if(interface[j].family == 'IPv4' && interface[j].address != '127.0.0.1'){
-				addresses.push(interface[j].address);
+		let iface = interfaces[interfaceNames[i]];
+		for(let j = 0; j < iface.length; j++){
+			if(iface[j].family == 'IPv4' && iface[j].address != '127.0.0.1'){
+				addresses.push(iface[j].address);
 			}
 		}
 	}
@@ -118,27 +113,12 @@ if(program.address){
 	}
 
 	addr = addresses[0];
-	logger('Selected',addr ,'as network interface');
+	logger('Selected', addr, 'as network interface');
 }
 
-//audio device
-let audioDevice = rtAudio.getDefaultInputDevice();
-let audioChannels;
-if(program.device){
-	audioDevice = parseInt(program.device);
-}
-
-let selectedDevice = audioDevices[audioDevice];
-
-if(selectedDevice && selectedDevice.inputChannels > 0){
-	logger('Selected device', selectedDevice.name, 'with ' + selectedDevice.inputChannels + ' input channels');
-	audioChannels = Math.min(8, selectedDevice.inputChannels);
-}else{
-	console.error('Invalid audio device!');
-	process.exit();
-}
-
-if(program.channels && parseInt(program.channels) != NaN && parseInt(program.channels) <= audioChannels){
+//audio channels
+let audioChannels = 2;
+if(program.channels){
 	audioChannels = parseInt(program.channels);
 }
 
@@ -150,16 +130,7 @@ if(program.mcast){
 
 logger('Selected '+aes67Multicast+' as RTP multicast address.');
 
-// Add interface to multicast membership (otherwise the OS randomly selects an interface for the multicast traffic)
-client.addMembership(aes67Multicast, addr);
-client.setMulticastInterface(addr);
-
-if(program.ttl){
-	client.setMulticastTTL(parseInt(program.ttl));
-	logger('Set multicast TTL to', program.ttl);
-}
-
-//AES67 params (hardcoded)
+//AES67 params
 const samplerate = 48000;
 const ptime = 1;
 const fpp = (samplerate / 1000) * ptime;
@@ -167,20 +138,26 @@ const encoding = 'L24';
 const sessID = Math.round(Date.now() / 1000);
 const sessVersion = sessID;
 let ptpMaster;
-
-//rtp vars
-let seqNum = 0;
-let timestampCalc = 0;
 let ssrc = sessID % 0x100000000;
 
-//timestamp offset stuff
-let offsetSum = 0;
-let count = 0;
-let correctTimestamp = true;
+//manual latency offset
+let latencyOffset = 0;
+if(program.latency){
+	latencyOffset = parseFloat(program.latency);
+	logger('Timestamp offset:', latencyOffset, 'ms');
+}
+const latencyOffsetSamples = Math.round(latencyOffset * samplerate / 1000);
 
-//open audio stream
-logger('Opening audio stream.');
-rtAudio.openStream(null, {deviceId: audioDevice, nChannels: audioChannels, firstChannel: 0}, RtAudioFormat.RTAUDIO_SINT16, samplerate, fpp, streamName, pcm => rtpSend(pcm));
+let domainNumber = 0;
+if(program.ptpDomain){
+	domainNumber = parseInt(program.ptpDomain);
+}
+
+let ttl = 1;
+if(program.ttl){
+	ttl = parseInt(program.ttl);
+}
+
 logger('Trying to sync to PTP master.');
 
 //ptp sync timeout
@@ -191,20 +168,21 @@ setTimeout(function(){
 	}
 }, 10000);
 
-let domainNumber = 0;
-if(program.ptpDomain){
-	domainNumber = parseInt(program.ptpDomain);
-}
-//init PTP client
+//init PTP client, then start GStreamer pipeline
 ptpv2.init(addr, domainNumber, function(){
 	ptpMaster = ptpv2.ptp_master();
 	logger('Synced to', ptpMaster, 'successfully');
 
-	//start audio and sdp
-	logger('Starting SAP annoucements and audio stream.');
-	rtAudio.start();
+	//compute PTP-aligned RTP timestamp offset
+	let ptpTime = ptpv2.ptp_time();
+	let timestampRTP = ((ptpTime[0] * samplerate) + Math.round((ptpTime[1] * samplerate) / 1000000000)) % 0x100000000;
+	let timestampOffset = (Math.floor(timestampRTP / fpp) * fpp - latencyOffsetSamples + 0x100000000) % 0x100000000;
+	logger('PTP-aligned timestamp offset:', timestampOffset);
+
+	//start SAP/SDP announcements
 	sdp.start(addr, aes67Multicast, samplerate, audioChannels, encoding, streamName, sessID, sessVersion, ptpMaster, domainNumber);
 
+	//start NMOS if enabled
 	if(program.nmos){
 		nmos.start({
 			addr: addr,
@@ -220,69 +198,89 @@ ptpv2.init(addr, domainNumber, function(){
 			ptpDomain: domainNumber
 		});
 	}
+
+	//build GStreamer pipeline
+	let gstArgs = [];
+
+	//audio source
+	if(program.device){
+		gstArgs.push('wasapi2src', 'device=' + program.device);
+	}else{
+		gstArgs.push('wasapi2src');
+	}
+
+	if(program.loopback){
+		gstArgs.push('loopback=true');
+	}
+
+	if(program.lowLatency){
+		gstArgs.push('low-latency=true');
+	}
+
+	gstArgs.push('!');
+
+	//force format to match AES67 requirements
+	gstArgs.push(
+		'audioconvert', '!',
+		'audioresample', '!',
+		'audio/x-raw,format=S24BE,rate=' + samplerate + ',channels=' + audioChannels, '!',
+		'rtpL24pay',
+		'pt=96',
+		'min-ptime=' + (ptime * 1000000),       // 1ms in nanoseconds
+		'max-ptime=' + (ptime * 1000000),       // 1ms in nanoseconds
+		'timestamp-offset=' + timestampOffset,
+		'ssrc=' + ssrc,
+		'!',
+		'udpsink',
+		'host=' + aes67Multicast,
+		'port=5004',
+		'multicast-iface=' + addr,
+		'ttl=' + ttl,
+		'sync=true',
+		'async=false'
+	);
+
+	logger('GStreamer pipeline:', 'gst-launch-1.0', gstArgs.join(' '));
+
+	//spawn GStreamer
+	const gst = spawn('gst-launch-1.0', gstArgs, {
+		stdio: ['ignore', 'pipe', 'pipe']
+	});
+
+	gst.stdout.on('data', function(data){
+		const msg = data.toString().trim();
+		if(msg) logger('[GStreamer]', msg);
+	});
+
+	gst.stderr.on('data', function(data){
+		const msg = data.toString().trim();
+		if(msg) logger('[GStreamer]', msg);
+	});
+
+	gst.on('error', function(err){
+		console.error('Failed to start GStreamer:', err.message);
+		console.error('Is gst-launch-1.0 in your PATH?');
+		process.exit(1);
+	});
+
+	gst.on('close', function(code){
+		console.log('GStreamer exited with code', code);
+		process.exit(code || 0);
+	});
+
+	console.log('AES67 stream started via GStreamer');
+	console.log('  Source:', addr);
+	console.log('  Multicast:', aes67Multicast + ':5004');
+	console.log('  Channels:', audioChannels);
+	console.log('  SSRC:', ssrc);
+
+	//graceful shutdown
+	process.on('SIGINT', function(){
+		console.log('\nStopping...');
+		gst.kill('SIGTERM');
+	});
+	process.on('SIGTERM', function(){
+		gst.kill('SIGTERM');
+	});
 });
 
-//RTP implementation
-const expectedPcmBytes = fpp * audioChannels * 2; // expected L16 buffer size per callback
-let rtpSend = function(pcm){
-	//discard incorrectly sized buffers
-	if(pcm.length !== expectedPcmBytes){
-		logger('Unexpected PCM buffer size:', pcm.length, 'expected:', expectedPcmBytes);
-		return;
-	}
-
-	//convert L16 to L24
-	let samples = pcm.length / 2;
-	let l24 = Buffer.alloc(samples * 3);
-	
-	for(let i = 0; i < samples; i++){
-		l24.writeUInt16BE(pcm.readUInt16LE(i * 2), i * 3);
-	}
-	
-	//create RTP header and RTP buffer with header and pcm data
-	let rtpHeader = Buffer.alloc(12);
-	rtpHeader.writeUInt16BE((1 << 15) + 96, 0);// set version byte and add rtp payload type
-	rtpHeader.writeUInt16BE(seqNum, 2);
-	rtpHeader.writeUInt32BE(ssrc, 8);
-	
-	let rtpBuffer = Buffer.concat([rtpHeader, l24]);
-
-	// timestamp correction stuff
-	if(correctTimestamp){
-		correctTimestamp = false;
-
-		let ptpTime = ptpv2.ptp_time();
-		let timestampRTP = ((ptpTime[0] * samplerate) + Math.round((ptpTime[1] * samplerate) / 1000000000)) % 0x100000000;
-		timestampCalc = Math.floor(timestampRTP / fpp)*fpp;
-	}
-	
-	//write timestamp
-	rtpBuffer.writeUInt32BE(timestampCalc, 4);
-	
-	//send RTP packet
-	client.send(rtpBuffer, 5004, aes67Multicast);	
-
-	//timestamp average stuff
-	let ptpTime = ptpv2.ptp_time();
-	let timestampRTP = ((ptpTime[0] * samplerate) + Math.round((ptpTime[1] * samplerate) / 1000000000)) % 0x100000000;
-	offsetSum += Math.abs(timestampRTP - timestampCalc);
-	count++;
-
-	//increase timestamp and seqnum
-	seqNum = (seqNum + 1) % 0x10000;
-	timestampCalc = (timestampCalc + fpp) % 0x100000000;
-}
-
-//Interval for timestamp correction calculation
-setInterval(function(){
-	let avg = Math.round(offsetSum / count);
-
-	if(avg > fpp){
-		correctTimestamp = true;
-		let offsetMS = Math.round(avg / fpp * 1000) / 1000;
-		logger('Resycing PTP and RTP timestamp. Offset was '+offsetMS+'ms.');
-	}
-
-	offsetSum = 0;
-	count = 0;
-}, 100);

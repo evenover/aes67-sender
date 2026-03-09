@@ -1,5 +1,5 @@
 diff --git a/node_modules/ptpv2/ptp.js b/node_modules/ptpv2/ptp.js
-index f5dd89c..769df91 100644
+index f5dd89c..312e8b5 100644
 --- a/node_modules/ptpv2/ptp.js
 +++ b/node_modules/ptpv2/ptp.js
 @@ -12,25 +12,61 @@ var minSyncInterval = 10000; // in ms
@@ -166,3 +166,14 @@ index f5dd89c..769df91 100644
  		//read ts2 timestamp
  		var tsS = (buffer.readUInt16BE(34) << 4) + buffer.readUInt32BE(36);
  		var tsNS = buffer.readUInt32BE(40);
+@@ -177,6 +235,10 @@ ptpClientGeneral.on('message', function(buffer, remote) {
+ 		//calc offset
+ 		let delta = (0.5 * (ts1[0] - t1[0] - ts2[0] + t2[0])) * 1000000000 + 0.5 * (ts1[1] - t1[1] - ts2[1] + t2[1]);
+ 
++		//apply only a fraction of the correction to avoid offset jumps (servo filter)
++		let alpha = sync ? 0.05 : 1.0; // full correction on first sync, 5% after
++		delta = delta * alpha;
++
+ 		let deltaSplit = [0, 0];
+ 		deltaSplit[1] = (delta % 1000000000);
+ 		deltaSplit[0] = Math.round((delta - deltaSplit[1]) / 1000000000);
